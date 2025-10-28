@@ -2,7 +2,6 @@
 Database module для хранения данных регистраций
 """
 import sqlite3
-import json
 from datetime import datetime
 from typing import Optional, Dict, List
 
@@ -31,6 +30,15 @@ class Database:
                 consent_datetime TEXT NOT NULL,
                 registration_datetime TEXT NOT NULL,
                 telegram_username TEXT
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS admin_chats (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                chat_id INTEGER UNIQUE NOT NULL,
+                added_datetime TEXT NOT NULL
             )
         """)
 
@@ -146,4 +154,48 @@ class Database:
             'by_university': dict(universities),
             'by_course': dict(courses)
         }
+
+    def save_admin_chat(self, user_id: int, username: str, chat_id: int) -> bool:
+        """Сохранение chat_id администратора"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO admin_chats 
+                (user_id, username, chat_id, added_datetime)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, username, chat_id, datetime.now().isoformat()))
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error saving admin chat: {e}")
+            return False
+
+    def get_admin_chats(self) -> List[int]:
+        """Получение всех chat_id администраторов"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT chat_id FROM admin_chats")
+        rows = cursor.fetchall()
+
+        conn.close()
+
+        return [row[0] for row in rows]
+
+    def is_admin_registered(self, user_id: int) -> bool:
+        """Проверка зарегистрирован ли админ"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM admin_chats WHERE user_id = ?", (user_id,))
+        count = cursor.fetchone()[0]
+
+        conn.close()
+
+        return count > 0
+
 

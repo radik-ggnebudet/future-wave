@@ -18,7 +18,7 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
-from config import UNIVERSITIES, COURSES, CITY, PERSONAL_DATA_CONSENT, ORGANIZATION_INFO
+from config import UNIVERSITIES, COURSES, PERSONAL_DATA_CONSENT, ORGANIZATION_INFO, ADMIN_USERNAMES
 from database import Database
 
 # Загрузка переменных окружения
@@ -41,9 +41,202 @@ db = Database()
 ) = range(9)
 
 
+def is_admin(user) -> bool:
+    """Проверка является ли пользователь администратором"""
+    if user.username:
+        return user.username.lower() in [admin.lower() for admin in ADMIN_USERNAMES]
+    return False
+
+
+async def notify_admins(context: ContextTypes.DEFAULT_TYPE, registration_data: Dict) -> None:
+    """Отправка уведомления всем админам о новой регистрации"""
+    username_display = f"@{registration_data['telegram_username']}" if registration_data['telegram_username'] else "не указан"
+
+    notification_text = (
+        "🆕 НОВАЯ РЕГИСТРАЦИЯ!\n\n"
+        f"👤 ФИО: {registration_data['full_name']}\n"
+        f"📅 Дата рождения: {registration_data['birth_date']}\n"
+        f"📧 Email: {registration_data['email']}\n"
+        f"📱 Телефон: {registration_data['phone']}\n"
+        f"🎓 Университет: {registration_data['university']}\n"
+        f"📚 Курс: {registration_data['course']}\n"
+        f"🆔 Telegram: {username_display}\n"
+        f"🕐 Время: {datetime.fromisoformat(registration_data['registration_datetime']).strftime('%d.%m.%Y %H:%M:%S')}\n"
+    )
+
+    # Получаем chat_id всех админов
+    admin_chats = db.get_admin_chats()
+
+    # Отправляем уведомление каждому админу
+    for chat_id in admin_chats:
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=notification_text)
+        except Exception as e:
+            print(f"Ошибка при отправке уведомления админу {chat_id}: {e}")
+
+
+async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать админ-панель"""
+    user = update.effective_user
+
+    # Получаем статистику
+    stats = db.get_statistics()
+
+    panel_text = (
+        f"👑 АДМИН-ПАНЕЛЬ\n\n"
+        f"Добро пожаловать, @{user.username}!\n\n"
+        f"📊 СТАТИСТИКА РЕГИСТРАЦИЙ:\n"
+        f"👥 Всего зарегистрировано: {stats['total']}\n\n"
+    )
+
+    # Добавляем статистику по университетам
+    if stats['by_university']:
+        panel_text += "🎓 По университетам:\n"
+        for uni, count in sorted(stats['by_university'].items(), key=lambda x: x[1], reverse=True):
+            panel_text += f"  • {uni}: {count}\n"
+        panel_text += "\n"
+
+    # Добавляем статистику по курсам
+    if stats['by_course']:
+        panel_text += "📚 По курсам:\n"
+        for course, count in sorted(stats['by_course'].items(), key=lambda x: x[1], reverse=True):
+            panel_text += f"  • {course}: {count}\n"
+
+    # Кнопки админ-панели
+    keyboard = [
+        [InlineKeyboardButton("📋 Список всех участников", callback_data="admin_list_all")],
+        [InlineKeyboardButton("📊 Обновить статистику", callback_data="admin_refresh")],
+        [InlineKeyboardButton("📥 Экспорт данных", callback_data="admin_export")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.message:
+        await update.message.reply_text(panel_text, reply_markup=reply_markup)
+    else:
+        await update.callback_query.message.edit_text(panel_text, reply_markup=reply_markup)
+
+
+async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик кнопок админ-панели"""
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+
+    # Проверяем права администратора
+    if not is_admin(user):
+        await query.answer("❌ У вас нет прав администратора", show_alert=True)
+        return
+
+    if query.data == "admin_refresh":
+        # Обновляем статистику
+        await show_admin_panel(update, context)
+
+    elif query.data == "admin_list_all":
+        # Показываем список всех участников
+        registrations = db.get_all_registrations()
+
+        if not registrations:
+            await query.edit_message_text(
+                "📋 Список участников пуст.\n\n"
+                "Пока никто не зарегистрировался на форум.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ Назад в админ-панель", callback_data="admin_back")
+                ]])
+            )
+            return
+
+        # Формируем список участников (показываем первые 10)
+        list_text = f"📋 СПИСОК УЧАСТНИКОВ (всего: {len(registrations)})\n\n"
+
+        for i, reg in enumerate(registrations[:10], 1):
+            username_display = f"@{reg['telegram_username']}" if reg['telegram_username'] else "—"
+            list_text += (
+                f"{i}. {reg['full_name']}\n"
+                f"   🎓 {reg['university']}\n"
+                f"   📚 {reg['course']}\n"
+                f"   📱 {reg['phone']}\n"
+                f"   🆔 {username_display}\n\n"
+            )
+
+        if len(registrations) > 10:
+            list_text += f"... и еще {len(registrations) - 10} участников\n\n"
+
+        keyboard = [
+            [InlineKeyboardButton("◀️ Назад в админ-панель", callback_data="admin_back")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(list_text, reply_markup=reply_markup)
+
+    elif query.data == "admin_export":
+        # Экспорт данных в CSV формате
+        registrations = db.get_all_registrations()
+
+        if not registrations:
+            await query.answer("📋 Нет данных для экспорта", show_alert=True)
+            return
+
+        # Формируем CSV
+        csv_content = "ФИО,Дата рождения,Email,Телефон,Университет,Курс,Telegram,Дата регистрации\n"
+
+        for reg in registrations:
+            username = reg['telegram_username'] or ''
+            csv_content += (
+                f"{reg['full_name']},{reg['birth_date']},{reg['email']},"
+                f"{reg['phone']},{reg['university']},{reg['course']},"
+                f"@{username},{reg['registration_datetime']}\n"
+            )
+
+        # Отправляем файл
+        from io import BytesIO
+        file = BytesIO(csv_content.encode('utf-8'))
+        file.name = f"registrations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+        await query.message.reply_document(
+            document=file,
+            filename=file.name,
+            caption=f"📊 Экспорт регистраций\nВсего участников: {len(registrations)}"
+        )
+
+        await query.answer("✅ Файл отправлен")
+
+    elif query.data == "admin_back":
+        # Возврат в админ-панель
+        await show_admin_panel(update, context)
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Команда для открытия админ-панели"""
+    user = update.effective_user
+
+    if not is_admin(user):
+        await update.message.reply_text(
+            "❌ У вас нет прав администратора.\n\n"
+            "Для регистрации на форум используйте команду /start"
+        )
+        return
+
+    # Сохраняем chat_id админа
+    if not db.is_admin_registered(user.id):
+        db.save_admin_chat(user.id, user.username or '', update.effective_chat.id)
+
+    await show_admin_panel(update, context)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало диалога регистрации"""
     user = update.effective_user
+
+    # Проверяем, является ли пользователь администратором
+    if is_admin(user):
+        # Сохраняем chat_id админа, если еще не сохранен
+        if not db.is_admin_registered(user.id):
+            db.save_admin_chat(user.id, user.username or '', update.effective_chat.id)
+
+        # Открываем админ-панель
+        await show_admin_panel(update, context)
+        return ConversationHandler.END
 
     # Проверяем, не зарегистрирован ли пользователь уже
     registration = db.get_registration(user.id)
@@ -386,6 +579,9 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         success = db.save_registration(registration_data)
 
         if success:
+            # Отправляем уведомления админам о новой регистрации
+            await notify_admins(context, registration_data)
+
             await query.edit_message_text(
                 "🎉 РЕГИСТРАЦИЯ ЗАВЕРШЕНА!\n\n"
                 f"Спасибо, {user_data['full_name']}!\n\n"
@@ -479,6 +675,10 @@ def main():
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(CommandHandler('restart', restart))
+    application.add_handler(CommandHandler('admin', admin_command))
+
+    # Обработчик для кнопок админ-панели
+    application.add_handler(CallbackQueryHandler(admin_callback_handler, pattern="^admin_"))
 
     # Запускаем бота
     print("🤖 Бот запущен! Ожидание сообщений...")
