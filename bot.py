@@ -540,14 +540,17 @@ async def course(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Убираем reply-клавиатуру и отправляем сводку с инлайн-кнопками
     await update.message.reply_text(
         summary,
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    await update.message.reply_text(
+        "Пожалуйста, подтвердите введённые данные:",
         reply_markup=reply_markup
     )
 
-    # Убираем клавиатуру с курсами
-    await update.message.reply_text(".", reply_markup=ReplyKeyboardRemove())
-    await update.message.delete()
 
     return CONFIRMATION
 
