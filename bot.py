@@ -238,22 +238,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await show_admin_panel(update, context)
         return ConversationHandler.END
 
-    # Проверяем, не зарегистрирован ли пользователь уже
-    registration = db.get_registration(user.id)
-    if registration:
-        await update.message.reply_text(
-            f"Здравствуйте, {registration['full_name']}!\n\n"
-            f"Вы уже зарегистрированы на форум Future Wave.\n\n"
-            f"📋 Ваши данные:\n"
-            f"ФИО: {registration['full_name']}\n"
-            f"Дата рождения: {registration['birth_date']}\n"
-            f"Email: {registration['email']}\n"
-            f"Телефон: {registration['phone']}\n"
-            f"Университет: {registration['university']}\n"
-            f"Курс: {registration['course']}\n\n"
-            f"Для повторной регистрации используйте /restart"
-        )
-        return ConversationHandler.END
+    # Проверяем флаг перезапуска
+    force_restart = context.user_data.get('force_restart', False)
+
+    # Проверяем, не зарегистрирован ли пользователь уже (только если не перезапуск)
+    if not force_restart:
+        registration = db.get_registration(user.id)
+        if registration:
+            await update.message.reply_text(
+                f"Здравствуйте, {registration['full_name']}!\n\n"
+                f"Вы уже зарегистрированы на форум Future Wave.\n\n"
+                f"📋 Ваши данные:\n"
+                f"ФИО: {registration['full_name']}\n"
+                f"Дата рождения: {registration['birth_date']}\n"
+                f"Email: {registration['email']}\n"
+                f"Телефон: {registration['phone']}\n"
+                f"Университет: {registration['university']}\n"
+                f"Курс: {registration['course']}\n\n"
+                f"Для повторной регистрации используйте /restart"
+            )
+            return ConversationHandler.END
+
+    # Очищаем флаг перезапуска, если он был установлен
+    if force_restart:
+        context.user_data.pop('force_restart', None)
 
     # Приветствие
     welcome_text = (
@@ -273,8 +281,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
-    # Отправляем согласие на обработку персональных данных
-    await update.message.reply_text(PERSONAL_DATA_CONSENT)
+    # Отправляем согласие на обработку персональных данных с кликабельными ссылками
+    await update.message.reply_text(PERSONAL_DATA_CONSENT, parse_mode='Markdown', disable_web_page_preview=True)
 
     # Кнопки для согласия
     keyboard = [
@@ -295,6 +303,8 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """Обработка согласия на обработку персональных данных"""
     query = update.callback_query
     await query.answer()
+
+    print(f"DEBUG: consent_callback вызван, query.data = {query.data}")
 
     if query.data == "consent_yes":
         # Сохраняем согласие и время
@@ -623,6 +633,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Перезапуск регистрации"""
     context.user_data.clear()
+    # Устанавливаем флаг, что это перезапуск
+    context.user_data['force_restart'] = True
     await update.message.reply_text(
         "Начинаем регистрацию заново...",
         reply_markup=ReplyKeyboardRemove()
@@ -659,7 +671,7 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            CONSENT: [CallbackQueryHandler(consent_callback)],
+            CONSENT: [CallbackQueryHandler(consent_callback, pattern="^consent_")],
             FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, full_name)],
             BIRTH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, birth_date)],
             EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, email)],
@@ -667,7 +679,7 @@ def main():
             UNIVERSITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, university)],
             UNIVERSITY_CUSTOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, university_custom)],
             COURSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, course)],
-            CONFIRMATION: [CallbackQueryHandler(confirmation)],
+            CONFIRMATION: [CallbackQueryHandler(confirmation, pattern="^confirm_")],
         },
         fallbacks=[
             CommandHandler('cancel', cancel),
