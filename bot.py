@@ -17,9 +17,58 @@ from telegram.ext import (
     ContextTypes
 )
 from dotenv import load_dotenv
+from colorama import Fore, Back, Style, init
 
 from config import UNIVERSITIES, COURSES, PERSONAL_DATA_CONSENT, ORGANIZATION_INFO, ADMIN_USERNAMES
 from database import Database
+
+# Инициализация colorama для Windows
+init(autoreset=True)
+
+
+def log_info(message: str, user=None):
+    """Логирование информационных сообщений"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    user_info = f"@{user.username} ({user.id})" if user else "System"
+    print(f"{Fore.CYAN}[{timestamp}] ℹ️  {Style.BRIGHT}{message}{Style.RESET_ALL} | {Fore.YELLOW}{user_info}{Style.RESET_ALL}")
+
+
+def log_success(message: str, user=None):
+    """Логирование успешных действий"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    user_info = f"@{user.username} ({user.id})" if user else "System"
+    print(f"{Fore.GREEN}[{timestamp}] ✅ {Style.BRIGHT}{message}{Style.RESET_ALL} | {Fore.YELLOW}{user_info}{Style.RESET_ALL}")
+
+
+def log_warning(message: str, user=None):
+    """Логирование предупреждений"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    user_info = f"@{user.username} ({user.id})" if user else "System"
+    print(f"{Fore.YELLOW}[{timestamp}] ⚠️  {Style.BRIGHT}{message}{Style.RESET_ALL} | {Fore.YELLOW}{user_info}{Style.RESET_ALL}")
+
+
+def log_error(message: str, user=None):
+    """Логирование ошибок"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    user_info = f"@{user.username} ({user.id})" if user else "System"
+    print(f"{Fore.RED}[{timestamp}] ❌ {Style.BRIGHT}{message}{Style.RESET_ALL} | {Fore.YELLOW}{user_info}{Style.RESET_ALL}")
+
+
+def log_admin(message: str, user=None):
+    """Логирование действий администраторов"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    user_info = f"@{user.username} ({user.id})" if user else "Admin"
+    print(f"{Fore.MAGENTA}[{timestamp}] 👑 {Style.BRIGHT}{message}{Style.RESET_ALL} | {Fore.YELLOW}{user_info}{Style.RESET_ALL}")
+
+
+def log_registration(message: str, data: Dict):
+    """Логирование регистраций"""
+    timestamp = datetime.now().strftime('%H:%M:%S')
+    print(f"{Fore.GREEN}{Back.BLACK}[{timestamp}] 🎉 {Style.BRIGHT}{message}{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}    👤 {data.get('full_name', 'N/A')}")
+    print(f"{Fore.CYAN}    📧 {data.get('email', 'N/A')}")
+    print(f"{Fore.CYAN}    🎓 {data.get('university', 'N/A')}")
+    print(f"{Fore.CYAN}    📚 {data.get('course', 'N/A')}{Style.RESET_ALL}")
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -67,17 +116,22 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, registration_data: D
     # Получаем chat_id всех админов
     admin_chats = db.get_admin_chats()
 
+    log_info(f"Отправка уведомлений {len(admin_chats)} администраторам о новой регистрации")
+
     # Отправляем уведомление каждому админу
     for chat_id in admin_chats:
         try:
             await context.bot.send_message(chat_id=chat_id, text=notification_text)
+            log_success(f"Уведомление отправлено админу (chat_id: {chat_id})")
         except Exception as e:
-            print(f"Ошибка при отправке уведомления админу {chat_id}: {e}")
+            log_error(f"Ошибка при отправке уведомления админу {chat_id}: {e}")
 
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показать админ-панель"""
     user = update.effective_user
+
+    log_admin("Открытие админ-панели", user)
 
     # Получаем статистику
     stats = db.get_statistics()
@@ -125,14 +179,17 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     # Проверяем права администратора
     if not is_admin(user):
+        log_warning("Попытка доступа к админ-панели без прав", user)
         await query.answer("❌ У вас нет прав администратора", show_alert=True)
         return
 
     if query.data == "admin_refresh":
+        log_admin("Обновление статистики", user)
         # Обновляем статистику
         await show_admin_panel(update, context)
 
     elif query.data == "admin_list_all":
+        log_admin("Запрос списка всех участников", user)
         # Показываем список всех участников
         registrations = db.get_all_registrations()
 
@@ -170,10 +227,12 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(list_text, reply_markup=reply_markup)
 
     elif query.data == "admin_export":
+        log_admin("Запрос экспорта данных в CSV", user)
         # Экспорт данных в CSV формате
         registrations = db.get_all_registrations()
 
         if not registrations:
+            log_warning("Нет данных для экспорта", user)
             await query.answer("📋 Нет данных для экспорта", show_alert=True)
             return
 
@@ -199,6 +258,7 @@ async def admin_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             caption=f"📊 Экспорт регистраций\nВсего участников: {len(registrations)}"
         )
 
+        log_success(f"Экспорт выполнен: {len(registrations)} записей", user)
         await query.answer("✅ Файл отправлен")
 
     elif query.data == "admin_back":
@@ -228,11 +288,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало диалога регистрации"""
     user = update.effective_user
 
+    log_info("Команда /start", user)
+
     # Проверяем, является ли пользователь администратором
     if is_admin(user):
+        log_admin("Администратор распознан, открытие админ-панели", user)
         # Сохраняем chat_id админа, если еще не сохранен
         if not db.is_admin_registered(user.id):
             db.save_admin_chat(user.id, user.username or '', update.effective_chat.id)
+            log_success("Chat ID администратора сохранен", user)
 
         # Открываем админ-панель
         await show_admin_panel(update, context)
@@ -245,6 +309,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not force_restart:
         registration = db.get_registration(user.id)
         if registration:
+            log_info("Пользователь уже зарегистрирован", user)
             await update.message.reply_text(
                 f"Здравствуйте, {registration['full_name']}!\n\n"
                 f"Вы уже зарегистрированы на форум Future Wave.\n\n"
@@ -262,6 +327,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Очищаем флаг перезапуска, если он был установлен
     if force_restart:
         context.user_data.pop('force_restart', None)
+        log_info("Перезапуск регистрации (force_restart)", user)
+    else:
+        log_info("Начало новой регистрации", user)
 
     # Приветствие
     welcome_text = (
@@ -304,9 +372,10 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     await query.answer()
 
-    print(f"DEBUG: consent_callback вызван, query.data = {query.data}")
+    user = update.effective_user
 
     if query.data == "consent_yes":
+        log_success("Пользователь дал согласие на обработку данных", user)
         # Сохраняем согласие и время
         context.user_data['consent_given'] = True
         context.user_data['consent_datetime'] = datetime.now().isoformat()
@@ -319,6 +388,7 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         return FULL_NAME
     else:
+        log_warning("Пользователь отказался от обработки данных", user)
         await query.edit_message_text(
             "❌ Без согласия на обработку персональных данных мы не можем зарегистрировать вас на форум.\n\n"
             "Если вы передумаете, используйте команду /start для повторной регистрации.\n\n"
@@ -330,16 +400,19 @@ async def consent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение ФИО"""
+    user = update.effective_user
     name = update.message.text.strip()
 
     # Простая валидация (минимум 2 слова)
     if len(name.split()) < 2:
+        log_warning(f"Некорректный ввод ФИО: {name}", user)
         await update.message.reply_text(
             "⚠️ Пожалуйста, введите полное ФИО (минимум Фамилия и Имя).\n"
             "Например: Иванов Иван Иванович"
         )
         return FULL_NAME
 
+    log_info(f"ФИО введено: {name}", user)
     context.user_data['full_name'] = name
 
     await update.message.reply_text(
@@ -353,11 +426,13 @@ async def full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты рождения"""
+    user = update.effective_user
     date_text = update.message.text.strip()
 
     # Валидация формата даты
     date_pattern = r'^\d{2}\.\d{2}\.\d{4}$'
     if not re.match(date_pattern, date_text):
+        log_warning(f"Некорректный формат даты: {date_text}", user)
         await update.message.reply_text(
             "⚠️ Неверный формат даты. Пожалуйста, используйте формат ДД.ММ.ГГГГ\n"
             "Например: 15.03.2003"
@@ -384,11 +459,13 @@ async def birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return BIRTH_DATE
 
     except ValueError:
+        log_warning(f"Некорректная дата: {date_text}", user)
         await update.message.reply_text(
             "⚠️ Указана некорректная дата. Пожалуйста, проверьте правильность ввода."
         )
         return BIRTH_DATE
 
+    log_info(f"Дата рождения введена: {date_text}", user)
     context.user_data['birth_date'] = date_text
 
     await update.message.reply_text(
@@ -401,17 +478,20 @@ async def birth_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение email"""
+    user = update.effective_user
     email_text = update.message.text.strip()
 
     # Валидация email
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     if not re.match(email_pattern, email_text):
+        log_warning(f"Некорректный email: {email_text}", user)
         await update.message.reply_text(
             "⚠️ Неверный формат email. Пожалуйста, введите корректный адрес.\n"
             "Например: example@mail.ru"
         )
         return EMAIL
 
+    log_info(f"Email введен: {email_text}", user)
     context.user_data['email'] = email_text
 
     await update.message.reply_text(
@@ -424,6 +504,7 @@ async def email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение номера телефона"""
+    user = update.effective_user
     phone_text = update.message.text.strip()
 
     # Очистка от лишних символов
@@ -432,12 +513,14 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # Валидация номера телефона
     phone_pattern = r'^(\+7|8)\d{10}$'
     if not re.match(phone_pattern, phone_clean):
+        log_warning(f"Некорректный телефон: {phone_text}", user)
         await update.message.reply_text(
             "⚠️ Неверный формат номера телефона.\n"
             "Пожалуйста, введите номер в формате: +79991234567 или 89991234567"
         )
         return PHONE
 
+    log_info(f"Телефон введен: {phone_clean}", user)
     context.user_data['phone'] = phone_clean
 
     # Кнопки с университетами
@@ -462,15 +545,18 @@ async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def university(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение университета"""
+    user = update.effective_user
     university_text = update.message.text.strip()
 
     if university_text == "Другой университет":
+        log_info("Выбран вариант 'Другой университет'", user)
         await update.message.reply_text(
             "🎓 Пожалуйста, введите название вашего университета:",
             reply_markup=ReplyKeyboardRemove()
         )
         return UNIVERSITY_CUSTOM
 
+    log_info(f"Университет выбран: {university_text}", user)
     context.user_data['university'] = university_text
 
     # Кнопки с курсами
@@ -495,14 +581,17 @@ async def university(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def university_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение названия другого университета"""
+    user = update.effective_user
     university_text = update.message.text.strip()
 
     if len(university_text) < 3:
+        log_warning(f"Слишком короткое название университета: {university_text}", user)
         await update.message.reply_text(
             "⚠️ Пожалуйста, введите корректное название университета."
         )
         return UNIVERSITY_CUSTOM
 
+    log_info(f"Университет (вручную) введен: {university_text}", user)
     context.user_data['university'] = university_text
 
     # Кнопки с курсами
@@ -527,8 +616,10 @@ async def university_custom(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def course(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение курса обучения"""
+    user = update.effective_user
     course_text = update.message.text.strip()
 
+    log_info(f"Курс выбран: {course_text}", user)
     context.user_data['course'] = course_text
 
     # Формируем сводку всех данных
@@ -570,10 +661,13 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     query = update.callback_query
     await query.answer()
 
+    user = update.effective_user
+
     if query.data == "confirm_yes":
         # Сохраняем данные в базу
-        user = update.effective_user
         user_data = context.user_data
+
+        log_info("Пользователь подтвердил данные", user)
 
         registration_data = {
             'user_id': user.id,
@@ -592,6 +686,7 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         success = db.save_registration(registration_data)
 
         if success:
+            log_registration("НОВАЯ РЕГИСТРАЦИЯ ЗАВЕРШЕНА!", registration_data)
             # Отправляем уведомления админам о новой регистрации
             await notify_admins(context, registration_data)
 
@@ -605,6 +700,7 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                 parse_mode='Markdown'
             )
         else:
+            log_error("Ошибка при сохранении регистрации в БД", user)
             await query.edit_message_text(
                 "⚠️ Произошла ошибка при сохранении данных. "
                 "Пожалуйста, попробуйте зарегистрироваться позже или свяжитесь с организаторами."
@@ -613,6 +709,7 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         context.user_data.clear()
         return ConversationHandler.END
     else:
+        log_info("Пользователь отменил регистрацию на этапе подтверждения", user)
         await query.edit_message_text(
             "Регистрация отменена. Используйте /start для начала новой регистрации."
         )
@@ -622,6 +719,8 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отмена регистрации"""
+    user = update.effective_user
+    log_warning("Пользователь отменил регистрацию (/cancel)", user)
     await update.message.reply_text(
         "Регистрация отменена. Используйте /start для начала новой регистрации.",
         reply_markup=ReplyKeyboardRemove()
@@ -632,6 +731,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Перезапуск регистрации"""
+    user = update.effective_user
+    log_info("Команда /restart - перезапуск регистрации", user)
     context.user_data.clear()
     # Устанавливаем флаг, что это перезапуск
     context.user_data['force_restart'] = True
