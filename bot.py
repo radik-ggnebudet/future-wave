@@ -100,9 +100,19 @@ db = Database()
 
 def is_admin(user) -> bool:
     """Проверка является ли пользователь администратором"""
-    if user.username:
-        return user.username.lower() in [admin.lower() for admin in ADMIN_USERNAMES]
-    return False
+    if not user.username:
+        log_warning(f"У пользователя {user.first_name} (ID: {user.id}) нет username в Telegram", user)
+        return False
+
+    is_admin_user = user.username.lower() in [admin.lower() for admin in ADMIN_USERNAMES]
+
+    if is_admin_user:
+        log_admin(f"Пользователь @{user.username} распознан как администратор", user)
+    else:
+        log_info(f"Пользователь @{user.username} не является администратором", user)
+        log_info(f"Список админов: {ADMIN_USERNAMES}")
+
+    return is_admin_user
 
 
 async def send_to_internship_chat(context: ContextTypes.DEFAULT_TYPE, registration_data: Dict) -> None:
@@ -162,15 +172,27 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, registration_data: D
     # Получаем chat_id всех админов
     admin_chats = db.get_admin_chats()
 
+    if not admin_chats:
+        log_warning("⚠️ НЕТ ЗАРЕГИСТРИРОВАННЫХ АДМИНИСТРАТОРОВ! Администраторы должны написать боту /start или /admin чтобы получать уведомления")
+        return
+
     log_info(f"Отправка уведомлений {len(admin_chats)} администраторам о новой регистрации")
+    log_info(f"Chat IDs админов: {admin_chats}")
 
     # Отправляем уведомление каждому админу
+    sent_count = 0
+    failed_count = 0
+
     for chat_id in admin_chats:
         try:
             await context.bot.send_message(chat_id=chat_id, text=notification_text)
-            log_success(f"Уведомление отправлено админу (chat_id: {chat_id})")
+            log_success(f"✅ Уведомление отправлено админу (chat_id: {chat_id})")
+            sent_count += 1
         except Exception as e:
-            log_error(f"Ошибка при отправке уведомления админу {chat_id}: {e}")
+            log_error(f"❌ Ошибка при отправке уведомления админу {chat_id}: {e}")
+            failed_count += 1
+
+    log_info(f"Итого: отправлено {sent_count}, ошибок {failed_count}")
 
 
 async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -316,7 +338,10 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Команда для открытия админ-панели"""
     user = update.effective_user
 
+    log_admin(f"Команда /admin от пользователя @{user.username or 'NO_USERNAME'} (ID: {user.id})", user)
+
     if not is_admin(user):
+        log_warning(f"Попытка доступа к /admin без прав администратора", user)
         await update.message.reply_text(
             "❌ У вас нет прав администратора.\n\n"
             "Для регистрации на форум используйте команду /start"
@@ -324,8 +349,16 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Сохраняем chat_id админа
+    chat_id = update.effective_chat.id
     if not db.is_admin_registered(user.id):
-        db.save_admin_chat(user.id, user.username or '', update.effective_chat.id)
+        log_admin(f"Сохранение нового chat_id для администратора @{user.username}: {chat_id}", user)
+        success = db.save_admin_chat(user.id, user.username or '', chat_id)
+        if success:
+            log_success(f"✅ Chat ID администратора успешно сохранен: {chat_id}", user)
+        else:
+            log_error(f"❌ Ошибка при сохранении chat_id администратора", user)
+    else:
+        log_info(f"Chat ID администратора уже сохранен (user_id: {user.id}, chat_id: {chat_id})", user)
 
     await show_admin_panel(update, context)
 
@@ -340,9 +373,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if is_admin(user):
         log_admin("Администратор распознан, открытие админ-панели", user)
         # Сохраняем chat_id админа, если еще не сохранен
+        chat_id = update.effective_chat.id
         if not db.is_admin_registered(user.id):
-            db.save_admin_chat(user.id, user.username or '', update.effective_chat.id)
-            log_success("Chat ID администратора сохранен", user)
+            log_admin(f"Сохранение нового chat_id для администратора @{user.username}: {chat_id}", user)
+            success = db.save_admin_chat(user.id, user.username or '', chat_id)
+            if success:
+                log_success(f"✅ Chat ID администратора успешно сохранен: {chat_id}", user)
+            else:
+                log_error(f"❌ Ошибка при сохранении chat_id администратора", user)
+        else:
+            log_info(f"Chat ID администратора уже сохранен (user_id: {user.id}, chat_id: {chat_id})", user)
 
         # Открываем админ-панель
         await show_admin_panel(update, context)
@@ -835,10 +875,91 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/start - Начать регистрацию\n"
         "/restart - Перезапустить регистрацию\n"
         "/cancel - Отменить текущую регистрацию\n"
-        "/help - Показать эту справку\n\n"
+        "/help - Показать эту справку\n"
+        "/whoami - Показать информацию о вашем аккаунте\n\n"
         "По вопросам обращайтесь к организаторам форума Future Wave."
     )
     await update.message.reply_text(help_text)
+
+
+async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показать информацию о пользователе для диагностики"""
+    user = update.effective_user
+
+    log_info("Команда /whoami", user)
+
+    username_text = f"@{user.username}" if user.username else "❌ НЕТ USERNAME"
+    is_admin_status = "✅ ДА" if is_admin(user) else "❌ НЕТ"
+    is_registered_admin = "✅ ДА" if db.is_admin_registered(user.id) else "❌ НЕТ"
+
+    info_text = (
+        f"👤 ИНФОРМАЦИЯ О ВАШЕМ АККАУНТЕ\n\n"
+        f"Имя: {user.first_name}\n"
+        f"Фамилия: {user.last_name or 'не указана'}\n"
+        f"Username: {username_text}\n"
+        f"User ID: {user.id}\n"
+        f"Chat ID: {update.effective_chat.id}\n\n"
+        f"🔐 СТАТУС:\n"
+        f"Администратор: {is_admin_status}\n"
+        f"Chat ID сохранён: {is_registered_admin}\n\n"
+    )
+
+    if not user.username:
+        info_text += (
+            "⚠️ У вас нет username в Telegram!\n\n"
+            "Чтобы получить доступ к админ-панели:\n"
+            "1. Откройте Настройки → Редактировать профиль\n"
+            "2. Установите имя пользователя (Username)\n"
+            "3. Убедитесь что ваш username добавлен в список админов\n"
+            "4. Напишите боту /start снова\n"
+        )
+    elif not is_admin(user):
+        info_text += (
+            f"ℹ️ Вы не являетесь администратором.\n\n"
+            f"Если вы должны быть администратором, проверьте:\n"
+            f"1. Ваш username (@{user.username}) должен быть в списке админов\n"
+            f"2. Проверьте правильность написания username\n"
+            f"3. Обратитесь к разработчику бота\n"
+        )
+    else:
+        info_text += "✅ У вас есть доступ к админ-панели. Используйте /admin"
+
+    await update.message.reply_text(info_text)
+
+
+async def check_admins_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Проверка списка сохраненных администраторов (только для админов)"""
+    user = update.effective_user
+
+    if not is_admin(user):
+        await update.message.reply_text("❌ Эта команда доступна только администраторам")
+        return
+
+    log_admin("Команда /check_admins - проверка сохраненных администраторов", user)
+
+    # Получаем список сохраненных chat_id
+    admin_chats = db.get_admin_chats()
+
+    info_text = (
+        f"👑 ПРОВЕРКА АДМИНИСТРАТОРОВ\n\n"
+        f"📋 Список админов в config.py:\n"
+    )
+
+    for admin_username in ADMIN_USERNAMES:
+        info_text += f"  • @{admin_username}\n"
+
+    info_text += f"\n💾 Сохраненных chat_id в базе: {len(admin_chats)}\n\n"
+
+    if admin_chats:
+        info_text += "Chat IDs:\n"
+        for chat_id in admin_chats:
+            info_text += f"  • {chat_id}\n"
+    else:
+        info_text += "⚠️ НЕТ СОХРАНЕННЫХ CHAT_ID!\n\n"
+        info_text += "Каждый админ должен написать боту /start или /admin\n"
+
+    await update.message.reply_text(info_text)
+    log_info(f"Проверка завершена. Сохранено {len(admin_chats)} chat_id", user)
 
 
 def main():
@@ -876,6 +997,8 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(CommandHandler('whoami', whoami_command))
+    application.add_handler(CommandHandler('check_admins', check_admins_command))
     application.add_handler(CommandHandler('restart', restart))
     application.add_handler(CommandHandler('admin', admin_command))
 
