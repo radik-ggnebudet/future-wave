@@ -26,12 +26,20 @@ class Database:
                 phone TEXT NOT NULL,
                 university TEXT NOT NULL,
                 course TEXT NOT NULL,
+                interested_in_internship BOOLEAN NOT NULL DEFAULT 0,
                 consent_given BOOLEAN NOT NULL,
                 consent_datetime TEXT NOT NULL,
                 registration_datetime TEXT NOT NULL,
                 telegram_username TEXT
             )
         """)
+
+        # Добавляем колонку, если она еще не существует (для существующих БД)
+        try:
+            cursor.execute("ALTER TABLE registrations ADD COLUMN interested_in_internship BOOLEAN NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            # Колонка уже существует
+            pass
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS admin_chats (
@@ -54,8 +62,8 @@ class Database:
             cursor.execute("""
                 INSERT OR REPLACE INTO registrations 
                 (user_id, full_name, birth_date, email, phone, university, course, 
-                 consent_given, consent_datetime, registration_datetime, telegram_username)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 interested_in_internship, consent_given, consent_datetime, registration_datetime, telegram_username)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_data['user_id'],
                 user_data['full_name'],
@@ -64,6 +72,7 @@ class Database:
                 user_data['phone'],
                 user_data['university'],
                 user_data['course'],
+                user_data.get('interested_in_internship', False),
                 user_data['consent_given'],
                 user_data['consent_datetime'],
                 user_data['registration_datetime'],
@@ -97,10 +106,11 @@ class Database:
                 'phone': row[5],
                 'university': row[6],
                 'course': row[7],
-                'consent_given': row[8],
-                'consent_datetime': row[9],
-                'registration_datetime': row[10],
-                'telegram_username': row[11]
+                'interested_in_internship': row[8],
+                'consent_given': row[9],
+                'consent_datetime': row[10],
+                'registration_datetime': row[11],
+                'telegram_username': row[12]
             }
         return None
 
@@ -125,10 +135,11 @@ class Database:
                 'phone': row[5],
                 'university': row[6],
                 'course': row[7],
-                'consent_given': row[8],
-                'consent_datetime': row[9],
-                'registration_datetime': row[10],
-                'telegram_username': row[11]
+                'interested_in_internship': row[8],
+                'consent_given': row[9],
+                'consent_datetime': row[10],
+                'registration_datetime': row[11],
+                'telegram_username': row[12]
             })
 
         return registrations

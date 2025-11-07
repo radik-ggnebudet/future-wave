@@ -19,7 +19,14 @@ from telegram.ext import (
 from dotenv import load_dotenv
 from colorama import Fore, Back, Style, init
 
-from config import UNIVERSITIES, COURSES, PERSONAL_DATA_CONSENT, ORGANIZATION_INFO, ADMIN_USERNAMES
+from config import (
+    UNIVERSITIES,
+    COURSES,
+    PERSONAL_DATA_CONSENT,
+    ORGANIZATION_INFO,
+    ADMIN_USERNAMES,
+    INTERNSHIP_CHAT_ID
+)
 from database import Database
 
 # Инициализация colorama для Windows
@@ -86,8 +93,9 @@ db = Database()
     UNIVERSITY,
     UNIVERSITY_CUSTOM,
     COURSE,
+    INTERNSHIP_INTEREST,
     CONFIRMATION
-) = range(9)
+) = range(10)
 
 
 def is_admin(user) -> bool:
@@ -97,9 +105,46 @@ def is_admin(user) -> bool:
     return False
 
 
+async def send_to_internship_chat(context: ContextTypes.DEFAULT_TYPE, registration_data: Dict) -> None:
+    """Отправка регистрации в групповой чат (только если заинтересован в стажировках)"""
+    interested = registration_data.get('interested_in_internship', False)
+
+    # Отправляем только если заинтересован в стажировках
+    if not interested:
+        log_info("Пользователь не заинтересован в стажировках, отправка в групповой чат пропущена")
+        return
+
+    # Если ID чата не настроен, просто выходим
+    if not INTERNSHIP_CHAT_ID:
+        log_warning("ID группового чата для стажировок не настроен (INTERNSHIP_CHAT_ID = None)")
+        return
+
+    username_display = f"@{registration_data['telegram_username']}" if registration_data['telegram_username'] else "не указан"
+
+    message_text = (
+        f"🆕 НОВАЯ ЗАЯВКА (ЗАИНТЕРЕСОВАН В СТАЖИРОВКАХ)\n\n"
+        f"👤 ФИО: {registration_data['full_name']}\n"
+        f"📅 Дата рождения: {registration_data['birth_date']}\n"
+        f"📧 Email: {registration_data['email']}\n"
+        f"📱 Телефон: {registration_data['phone']}\n"
+        f"🎓 Университет: {registration_data['university']}\n"
+        f"📚 Курс: {registration_data['course']}\n"
+        f"💼 Стажировки: ✅ Да, интересны\n"
+        f"🆔 Telegram: {username_display}\n"
+        f"🕐 Время: {datetime.fromisoformat(registration_data['registration_datetime']).strftime('%d.%m.%Y %H:%M:%S')}\n"
+    )
+
+    try:
+        await context.bot.send_message(chat_id=INTERNSHIP_CHAT_ID, text=message_text)
+        log_success(f"Заявка со стажировкой отправлена в групповой чат (chat_id: {INTERNSHIP_CHAT_ID})")
+    except Exception as e:
+        log_error(f"Ошибка при отправке в групповой чат стажировок {INTERNSHIP_CHAT_ID}: {e}")
+
+
 async def notify_admins(context: ContextTypes.DEFAULT_TYPE, registration_data: Dict) -> None:
     """Отправка уведомления всем админам о новой регистрации"""
     username_display = f"@{registration_data['telegram_username']}" if registration_data['telegram_username'] else "не указан"
+    interest_text = "✅ Да" if registration_data.get('interested_in_internship', False) else "❌ Нет"
 
     notification_text = (
         "🆕 НОВАЯ РЕГИСТРАЦИЯ!\n\n"
@@ -109,6 +154,7 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, registration_data: D
         f"📱 Телефон: {registration_data['phone']}\n"
         f"🎓 Университет: {registration_data['university']}\n"
         f"📚 Курс: {registration_data['course']}\n"
+        f"💼 Стажировки: {interest_text}\n"
         f"🆔 Telegram: {username_display}\n"
         f"🕐 Время: {datetime.fromisoformat(registration_data['registration_datetime']).strftime('%d.%m.%Y %H:%M:%S')}\n"
     )
@@ -622,6 +668,43 @@ async def course(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     log_info(f"Курс выбран: {course_text}", user)
     context.user_data['course'] = course_text
 
+    # Спрашиваем о заинтересованности в стажировках
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, интересны", callback_data="internship_yes")],
+        [InlineKeyboardButton("❌ Нет, не интересны", callback_data="internship_no")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"✅ Курс: {course_text}\n\n"
+        f"💼 Интересны ли вам стажировки?",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    await update.message.reply_text(
+        "Пожалуйста, выберите ваш ответ:",
+        reply_markup=reply_markup
+    )
+
+    return INTERNSHIP_INTEREST
+
+
+async def internship_interest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка ответа на вопрос о стажировках"""
+    query = update.callback_query
+    await query.answer()
+
+    user = update.effective_user
+
+    if query.data == "internship_yes":
+        log_info("Пользователь заинтересован в стажировках", user)
+        context.user_data['interested_in_internship'] = True
+        interest_text = "Да, интересны"
+    else:
+        log_info("Пользователь не заинтересован в стажировках", user)
+        context.user_data['interested_in_internship'] = False
+        interest_text = "Нет, не интересны"
+
     # Формируем сводку всех данных
     user_data = context.user_data
     summary = (
@@ -631,7 +714,8 @@ async def course(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"Email: {user_data['email']}\n"
         f"Телефон: {user_data['phone']}\n"
         f"Университет: {user_data['university']}\n"
-        f"Курс: {user_data['course']}\n\n"
+        f"Курс: {user_data['course']}\n"
+        f"Стажировки: {interest_text}\n\n"
         f"Всё верно?"
     )
 
@@ -641,13 +725,9 @@ async def course(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Убираем reply-клавиатуру и отправляем сводку с инлайн-кнопками
-    await update.message.reply_text(
-        summary,
-        reply_markup=ReplyKeyboardRemove()
-    )
+    await query.edit_message_text(summary)
 
-    await update.message.reply_text(
+    await query.message.reply_text(
         "Пожалуйста, подтвердите введённые данные:",
         reply_markup=reply_markup
     )
@@ -677,6 +757,7 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             'phone': user_data['phone'],
             'university': user_data['university'],
             'course': user_data['course'],
+            'interested_in_internship': user_data.get('interested_in_internship', False),
             'consent_given': user_data['consent_given'],
             'consent_datetime': user_data['consent_datetime'],
             'registration_datetime': datetime.now().isoformat(),
@@ -687,8 +768,12 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
         if success:
             log_registration("НОВАЯ РЕГИСТРАЦИЯ ЗАВЕРШЕНА!", registration_data)
-            # Отправляем уведомления админам о новой регистрации
+
+            # Отправляем уведомления админам о новой регистрации (всегда)
             await notify_admins(context, registration_data)
+
+            # Отправляем данные в групповой чат стажировок (только если заинтересован)
+            await send_to_internship_chat(context, registration_data)
 
             await query.edit_message_text(
                 "🎉 РЕГИСТРАЦИЯ ЗАВЕРШЕНА!\n\n"
@@ -780,6 +865,7 @@ def main():
             UNIVERSITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, university)],
             UNIVERSITY_CUSTOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, university_custom)],
             COURSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, course)],
+            INTERNSHIP_INTEREST: [CallbackQueryHandler(internship_interest, pattern="^internship_")],
             CONFIRMATION: [CallbackQueryHandler(confirmation, pattern="^confirm_")],
         },
         fallbacks=[

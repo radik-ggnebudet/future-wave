@@ -36,8 +36,8 @@ CITY = "Санкт-Петербург"
 ADMIN_USERNAMES = [
     "jiznkoritse",
     "Gryaznulya520",
-    "vladillshk",
     "katetsare",
+    "ItsIndeika",
 ]
 
 # Информация о РМОО для согласия на обработку персональных данных
@@ -53,6 +53,10 @@ ORGANIZATION_INFO = {
 # Ссылки на документы (кликабельные)
 CONSENT_URL = "https://docs.google.com/document/d/1zMOjvuy_8wds61ZeE3sbdwiEIlOT9dH7aSeptbuegz4/edit?usp=sharing"
 PRIVACY_POLICY_URL = "https://docs.google.com/document/d/1iYLyurWJtBdeKhDYSl6QU88rtPa%D0%97CeRpJkamCaHV37s/edit?usp=sharing"
+
+# ID группового чата для отправки заявок со стажировками
+# Замените на реальный ID вашей группы (получите через @getidsbot или python get_chat_id.py)
+INTERNSHIP_CHAT_ID = -1003229518802  # ID группы для заявок с интересом к стажировкам
 
 # Текст для отображения ссылок на согласие и политику конфиденциальности
 PERSONAL_DATA_CONSENT = f"""
